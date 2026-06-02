@@ -4,7 +4,7 @@
 #include <string.h>
 
 int main() {
-    GlobalServerConfig gSrverGlobal;
+    GlobalServerConfig myServerGlobal;
     int targetPort = 9999;
     int adminMenuSelection = 0;
     int isEngineInitialized = 0;
@@ -24,8 +24,9 @@ int main() {
         }
 
         if (adminMenuSelection == 2) {
-            if (isEngineInitialized) 
-                shutdownServerEngine(&gSrverGlobal);
+            if (isEngineInitialized) {
+                shutdownServerEngine(&myServerGlobal);
+            }
             printf("관리 서버 제어 프로그램을 안전하게 종료합니다.\n");
             break;
         }
@@ -33,50 +34,51 @@ int main() {
         if (adminMenuSelection == 1) {
             if (!isEngineInitialized) {
                 printf("\n[설정] 생성할 특정 문자 코드의 길이를 입력하세요: ");
-                if (scanf("%d", &gSrverGlobal.codeLength) != 1 || gSrverGlobal.codeLength > 63) 
-                    gSrverGlobal.codeLength = 7;
+                if (scanf("%d", &myServerGlobal.codeLength) != 1 || myServerGlobal.codeLength > 63) {
+                    myServerGlobal.codeLength = 7;
+                }
 
-                memset(&gSrverGlobal.validStart, 0, sizeof(struct tm));
-                memset(&gSrverGlobal.validEnd, 0, sizeof(struct tm));
+                memset(&myServerGlobal.validStart, 0, sizeof(struct tm));
+                memset(&myServerGlobal.validEnd, 0, sizeof(struct tm));
 
                 printf("[설정] 시작 기간 입력 (YYYY MM DD HH MM): ");
                 scanf("%d %d %d %d %d", 
-                      &gSrverGlobal.validStart.tm_year, &gSrverGlobal.validStart.tm_mon, &gSrverGlobal.validStart.tm_mday,
-                      &gSrverGlobal.validStart.tm_hour, &gSrverGlobal.validStart.tm_min);
-                gSrverGlobal.validStart.tm_year -= 1900;
-                gSrverGlobal.validStart.tm_mon -= 1;
+                      &myServerGlobal.validStart.tm_year, &myServerGlobal.validStart.tm_mon, &myServerGlobal.validStart.tm_mday,
+                      &myServerGlobal.validStart.tm_hour, &myServerGlobal.validStart.tm_min);
+                myServerGlobal.validStart.tm_year -= 1900;
+                myServerGlobal.validStart.tm_mon -= 1;
 
                 printf("[설정] 만료 기간 입력 (YYYY MM DD HH MM): ");
                 scanf("%d %d %d %d %d", 
-                      &gSrverGlobal.validEnd.tm_year, &gSrverGlobal.validEnd.tm_mon, &gSrverGlobal.validEnd.tm_mday,
-                      &gSrverGlobal.validEnd.tm_hour, &gSrverGlobal.validEnd.tm_min);
-                gSrverGlobal.validEnd.tm_year -= 1900;
-                gSrverGlobal.validEnd.tm_mon -= 1;
+                      &myServerGlobal.validEnd.tm_year, &myServerGlobal.validEnd.tm_mon, &myServerGlobal.validEnd.tm_mday,
+                      &myServerGlobal.validEnd.tm_hour, &myServerGlobal.validEnd.tm_min);
+                myServerGlobal.validEnd.tm_year -= 1900;
+                myServerGlobal.validEnd.tm_mon -= 1;
 
-                generateSecureCode(&gSrverGlobal);
+                generateSecureCode(myServerGlobal.generatedAuthCode, myServerGlobal.codeLength);
 
-                int init_res = initServerEngine(&gSrverGlobal, targetPort);
-                if (init_res != 0) {
-                    printf("오류: %s (코드: %d)\n", gSrverGlobal.serverStatusMessage, init_res);
+                int initRes = initServerEngine(&myServerGlobal, targetPort);
+                if (initRes != 0) {
+                    printf("오류: %s (코드: %d)\n", myServerGlobal.serverStatusMsg, initRes);
                     continue;
                 }
                 isEngineInitialized = 1;
             }
 
-            int listen_res = startServerListen(&gSrverGlobal);
-            if (listen_res != 0) {
-                printf("오류: %s (코드: %d)\n", gSrverGlobal.serverStatusMessage, listen_res);
-                shutdownServerEngine(&gSrverGlobal);
+            int listenRes = startServerListen(&myServerGlobal);
+            if (listenRes != 0) {
+                printf("오류: %s (코드: %d)\n", myServerGlobal.serverStatusMsg, listenRes);
+                shutdownServerEngine(&myServerGlobal);
                 isEngineInitialized = 0;
                 continue;
             }
 
-            while (gSrverGlobal.is_running) {
-                LocalContext current_event_ctx;
-                int event_result = processClientEvent(&gSrverGlobal, &current_event_ctx);
-                if (event_result == 1) {
-                    printf("\n[안내] 검증 거부 이벤트가 감지되어 메인 제어반 인터페이스로 복귀합니다.\n");
-                    gSrverGlobal.is_running = 0;
+            while (myServerGlobal.isRunning) {
+                LocalContext currentEventCtx;
+                int eventResult = processClientEvent(&myServerGlobal, &currentEventCtx);
+                if (eventResult == 1) {
+                    printf("\n[안내] 검증 거부 또는 원격 중지 이벤트가 감지되어 메인 제어반 인터페이스로 복귀합니다.\n");
+                    myServerGlobal.isRunning = 0;
                 }
             }
         }
