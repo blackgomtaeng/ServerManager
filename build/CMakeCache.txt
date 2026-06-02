@@ -182,6 +182,9 @@ SM_Shared_Project_IS_TOP_LEVEL:STATIC=ON
 //Value Computed by CMake
 SM_Shared_Project_SOURCE_DIR:STATIC=C:/git/ServerManager
 
+//Dependencies for the target
+sm_lib_LIB_DEPENDS:STATIC=general;ws2_32;
+
 
 ########################
 # INTERNAL cache entries

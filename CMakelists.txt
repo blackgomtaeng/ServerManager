@@ -19,9 +19,7 @@ endif()
 add_executable(sm_exe main.c)
 
 # 실행 파일의 결과물 이름을 'sm'(윈도우는 sm.exe)으로 강제 통일
-set_target_properties(sm_exe PROPERTIES 
-    OUTPUT_NAME "sm"
-)
+set_target_properties(sm_exe PROPERTIES OUTPUT_NAME "sm")
 
 # 3. 실행 파일에 동적 라이브러리 연결 (타깃명 sm_lib를 지정)
 target_link_libraries(sm_exe PRIVATE sm_lib)

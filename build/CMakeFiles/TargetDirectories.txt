@@ -1,0 +1,4 @@
+C:/git/ServerManager/build/CMakeFiles/sm_lib.dir
+C:/git/ServerManager/build/CMakeFiles/sm_exe.dir
+C:/git/ServerManager/build/CMakeFiles/ALL_BUILD.dir
+C:/git/ServerManager/build/CMakeFiles/ZERO_CHECK.dir
