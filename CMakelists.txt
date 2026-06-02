@@ -1,23 +1,27 @@
 cmake_minimum_required(VERSION 3.10)
 project(SM_Shared_Project C)
 
-# 1. 동적 라이브러리 생성 (타깃명: sm)
-add_library(sm SHARED sm.c sm.h)
+# 1. 동적 라이브러리 생성 (타깃명: sm_lib)
+add_library(sm_lib SHARED sm.c sm.h)
 
-# [핵심] 모든 OS에서 라이브러리 이름을 'sm'으로 강제 통일
-# - PREFIX "" 설정을 통해 리눅스/macOS에서 'libsm.so'가 아닌 'sm.so'로 생성됩니다.
-set_target_properties(sm PROPERTIES 
+# 리눅스/macOS에서도 libsm.so 대신 sm.so로 생성되도록 설정
+set_target_properties(sm_lib PROPERTIES 
     OUTPUT_NAME "sm"
     PREFIX ""
 )
 
-# 2. 실행 파일 생성 (타깃명: sm)
-add_executable(sm main.c)
+# 윈도우 환경인 경우 소켓 라이브러리 링크 추가
+if(WIN32)
+    target_link_libraries(sm_lib PRIVATE ws2_32)
+endif()
 
-# [핵심] 모든 OS에서 실행 파일 이름을 'sm'으로 강제 통일
-set_target_properties(sm PROPERTIES 
+# 2. 실행 파일 생성 (타깃명: sm_exe)
+add_executable(sm_exe main.c)
+
+# 실행 파일의 결과물 이름을 'sm'(윈도우는 sm.exe)으로 강제 통일
+set_target_properties(sm_exe PROPERTIES 
     OUTPUT_NAME "sm"
 )
 
-# 3. 실행 파일에 동적 라이브러리 연결
-target_link_libraries(sm PRIVATE sm)
+# 3. 실행 파일에 동적 라이브러리 연결 (타깃명 sm_lib를 지정)
+target_link_libraries(sm_exe PRIVATE sm_lib)
