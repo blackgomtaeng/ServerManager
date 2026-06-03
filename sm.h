@@ -30,6 +30,7 @@ typedef struct {
     int port;
     char expTime[32];
     char remainingDays[16];
+    char userRole[16];
 } ConnectedClientRow;
 
 typedef struct {
@@ -42,11 +43,13 @@ typedef struct {
 #endif
     char serverStatusMsg[256];
     char generatedAuthCode[64];
+    char encryptedAuthCode[128];
     int codeLength;
     struct tm validStart;
     struct tm validEnd;
     ConnectedClientRow dbRows[100];
     int dbRowCount;
+    char targetRole[16];
 } GlobalServerConfig;
 
 typedef struct {
@@ -62,15 +65,10 @@ typedef struct {
 } LocalContext;
 
 SM_API int initServerEngine(GlobalServerConfig *globalConfig, int port);
-SM_API void generateSecureCode(char *outCode, int codeLength);
 SM_API int startServerListen(GlobalServerConfig *globalConfig);
 SM_API int processClientEvent(GlobalServerConfig *globalConfig, LocalContext *localCtx);
 SM_API void shutdownServerEngine(GlobalServerConfig *globalConfig);
-SM_API int getConnectedTableJson(GlobalServerConfig *globalConfig, char *outJson, int maxLen);
-SM_API void remoteShutdownServer(GlobalServerConfig *globalConfig);
-
-SM_API int verifyClientCredentials(const char *submittedCode, const char *generatedCode, const struct tm *start, const struct tm *end, int *outRemainingDays, char *outExpTimeStr);
-SM_API int registerClientToTable(GlobalServerConfig *globalConfig, char permit, const char *authCode, const char *ip, int port, const char *expTime, const char *remainingDays);
-SM_API int getSingleRowData(GlobalServerConfig *globalConfig, int index, char *outPermit, char *outAuth, char *outIp, int *outPort, char *outExp, char *outRem);
+SM_API void manageSecurityCode(GlobalServerConfig *globalConfig, int mode, const char *input, char *output);
+SM_API int parseFlexibleDateTime(const char *inputStr, struct tm *outputTm);
 
 #endif

@@ -38,24 +38,42 @@ int main() {
                     myServerGlobal.codeLength = 7;
                 }
 
-                memset(&myServerGlobal.validStart, 0, sizeof(struct tm));
-                memset(&myServerGlobal.validEnd, 0, sizeof(struct tm));
+                char rawStart[64] = {0,};
+                char rawEnd[64] = {0,};
+                while (getchar() != '\n');
 
-                printf("[설정] 시작 기간 입력 (YYYY MM DD HH MM): ");
-                scanf("%d %d %d %d %d", 
-                      &myServerGlobal.validStart.tm_year, &myServerGlobal.validStart.tm_mon, &myServerGlobal.validStart.tm_mday,
-                      &myServerGlobal.validStart.tm_hour, &myServerGlobal.validStart.tm_min);
-                myServerGlobal.validStart.tm_year -= 1900;
-                myServerGlobal.validStart.tm_mon -= 1;
+                printf("[설정] 시작 기간 입력 (자유 포맷 예: 2026.06.01 0000): ");
+                fgets(rawStart, sizeof(rawStart), stdin);
+                rawStart[strcspn(rawStart, "\r\n")] = 0;
+                parseFlexibleDateTime(rawStart, &myServerGlobal.validStart);
 
-                printf("[설정] 만료 기간 입력 (YYYY MM DD HH MM): ");
-                scanf("%d %d %d %d %d", 
-                      &myServerGlobal.validEnd.tm_year, &myServerGlobal.validEnd.tm_mon, &myServerGlobal.validEnd.tm_mday,
-                      &myServerGlobal.validEnd.tm_hour, &myServerGlobal.validEnd.tm_min);
-                myServerGlobal.validEnd.tm_year -= 1900;
-                myServerGlobal.validEnd.tm_mon -= 1;
+                printf("[설정] 만료 기간 입력 (자유 포맷 예: 2026-06-15 18:00): ");
+                fgets(rawEnd, sizeof(rawEnd), stdin);
+                rawEnd[strcspn(rawEnd, "\r\n")] = 0;
+                parseFlexibleDateTime(rawEnd, &myServerGlobal.validEnd);
 
-                generateSecureCode(myServerGlobal.generatedAuthCode, myServerGlobal.codeLength);
+                char rawRole[64] = {0,};
+                printf("[설정] 지정 권한 등급 입력 (일반유저는 Enter / 운영자 op / 관리자 admin / 매니저 m): ");
+                fgets(rawRole, sizeof(rawRole), stdin);
+                rawRole[strcspn(rawRole, "\r\n")] = 0;
+
+                for (int i = 0; rawRole[i]; i++) {
+                    rawRole[i] = tolower((unsigned char)rawRole[i]);
+                }
+
+                if (strlen(rawRole) == 0) {
+                    strcpy(myServerGlobal.targetRole, "USER");
+                } else if (strcmp(rawRole, "operator") == 0 || strcmp(rawRole, "op") == 0) {
+                    strcpy(myServerGlobal.targetRole, "OPERATOR");
+                } else if (strcmp(rawRole, "administrator") == 0 || strcmp(rawRole, "admin") == 0 || strcmp(rawRole, "adm") == 0) {
+                    strcpy(myServerGlobal.targetRole, "ADMIN");
+                } else if (strcmp(rawRole, "manager") == 0 || strcmp(rawRole, "m") == 0) {
+                    strcpy(myServerGlobal.targetRole, "MANAGER");
+                } else {
+                    strcpy(myServerGlobal.targetRole, "USER");
+                }
+
+                manageSecurityCode(&myServerGlobal, 1, NULL, NULL);
 
                 int initRes = initServerEngine(&myServerGlobal, targetPort);
                 if (initRes != 0) {

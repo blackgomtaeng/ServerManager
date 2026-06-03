@@ -52,15 +52,64 @@ int initServerEngine(GlobalServerConfig *globalConfig, int port) {
     return 0;
 }
 
-void generateSecureCode(char *outCode, int codeLength) {
-    if (outCode == NULL || codeLength <= 0) return;
-    const char charset[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    int charsetSize = sizeof(charset) - 1;
-    srand((unsigned int)time(NULL));
-    for (int i = 0; i < codeLength; i++) {
-        outCode[i] = charset[rand() % charsetSize];
+int parseFlexibleDateTime(const char *inputStr, struct tm *outputTm) {
+    if (inputStr == NULL || outputTm == NULL) return -1;
+    char digits[32] = {0,};
+    int digitIdx = 0;
+    
+    for (int i = 0; inputStr[i] != '\0' && digitIdx < 31; i++) {
+        if (isdigit((unsigned char)inputStr[i])) {
+            digits[digitIdx++] = inputStr[i];
+        }
     }
-    outCode[codeLength] = '\0';
+    digits[digitIdx] = '\0';
+
+    int year = 0, mon = 0, day = 0, hour = 0, min = 0;
+    if (digitIdx == 12) {
+        sscanf(digits, "%4d%2d%2d%2d%2d", &year, &mon, &day, &hour, &min);
+    } else if (digitIdx == 8) {
+        sscanf(digits, "%4d%2d%2d", &year, &mon, &day);
+        hour = 0; min = 0;
+    } else {
+        return -2;
+    }
+
+    memset(outputTm, 0, sizeof(struct tm));
+    outputTm->tm_year = year - 1900;
+    outputTm->tm_mon = mon - 1;
+    outputTm->tm_mday = day;
+    outputTm->tm_hour = hour;
+    outputTm->tm_min = min;
+    return 0;
+}
+
+void manageSecurityCode(GlobalServerConfig *globalConfig, int mode, const char *input, char *output) {
+    const char xorKey = 0x5A;
+    if (mode == 1) {
+        const char charset[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        int charsetSize = sizeof(charset) - 1;
+        srand((unsigned int)time(NULL));
+        for (int i = 0; i < globalConfig->codeLength; i++) {
+            globalConfig->generatedAuthCode[i] = charset[rand() % charsetSize];
+        }
+        globalConfig->generatedAuthCode[globalConfig->codeLength] = '\0';
+        
+        int i = 0;
+        while (globalConfig->generatedAuthCode[i] != '\0') {
+            sprintf(&globalConfig->encryptedAuthCode[i * 2], "%02X", (unsigned char)(globalConfig->generatedAuthCode[i] ^ xorKey));
+            i++;
+        }
+        globalConfig->encryptedAuthCode[i * 2] = '\0';
+    } else if (mode == 2 && input != NULL && output != NULL) {
+        int len = strlen(input);
+        int i = 0;
+        for (i = 0; i < len / 2; i++) {
+            unsigned int val;
+            sscanf(&input[i * 2], "%2X", &val);
+            output[i] = (char)(val ^ xorKey);
+        }
+        output[i] = '\0';
+    }
 }
 
 int startServerListen(GlobalServerConfig *globalConfig) {
@@ -71,41 +120,15 @@ int startServerListen(GlobalServerConfig *globalConfig) {
     }
     globalConfig->isRunning = 1;
     strcpy(globalConfig->serverStatusMsg, "Server is Live and Listening");
+    
     printf("\n===========================================\n");
     printf("   [통합 관리자 서버 엔진 활성화]   \n");
-    printf("   생성된 인증 코드: %s\n", globalConfig->generatedAuthCode);
+    printf("   지정 등급 권한: %s\n", globalConfig->targetRole);
+    printf("   원본 인증 코드: %s\n", globalConfig->generatedAuthCode);
+    printf("   암호화된 코드 : %s\n", globalConfig->encryptedAuthCode);
     printf("   포트 번호 [%d]에서 무한 루프 관제 시작\n", globalConfig->port);
     printf("===========================================\n\n");
-    printf("허가여부\t특정코드\t아이피\t\t포트\t유효만료시각\t\t남은일수\n");
-    return 0;
-}
-
-int verifyClientCredentials(const char *submittedCode, const char *generatedCode, const struct tm *start, const struct tm *end, int *outRemainingDays, char *outExpTimeStr) {
-    time_t now = time(NULL);
-    struct tm startMod = *start;
-    struct tm endMod = *end;
-    time_t startTime = mktime(&startMod);
-    time_t endTime = mktime(&endMod);
-    
-    double diffSec = difftime(endTime, now);
-    if (outRemainingDays) *outRemainingDays = (int)(diffSec / 86400.0);
-    if (outExpTimeStr) strftime(outExpTimeStr, 32, "%Y-%m-%d %H:%M:%S", &endMod);
-
-    if (strcmp(submittedCode, generatedCode) != 0) return 0;
-    if (now < startTime || now > endTime) return 0;
-    return 1;
-}
-
-int registerClientToTable(GlobalServerConfig *globalConfig, char permit, const char *authCode, const char *ip, int port, const char *expTime, const char *remainingDays) {
-    if (globalConfig == NULL || globalConfig->dbRowCount >= 100) return -1;
-    ConnectedClientRow *row = &globalConfig->dbRows[globalConfig->dbRowCount];
-    row->permit = permit;
-    strncpy(row->authCode, authCode, sizeof(row->authCode) - 1);
-    strncpy(row->ip, ip, sizeof(row->ip) - 1);
-    row->port = port;
-    strncpy(row->expTime, expTime, sizeof(row->expTime) - 1);
-    strncpy(row->remainingDays, remainingDays, sizeof(row->remainingDays) - 1);
-    globalConfig->dbRowCount++;
+    printf("허가여부\t접근등급\t입력암호코드\t\t\t아이피\t\t포트\t유효만료시각\t\t남은일수\n");
     return 0;
 }
 
@@ -119,7 +142,7 @@ int processClientEvent(GlobalServerConfig *globalConfig, LocalContext *localCtx)
     localCtx->readBytes = recv(localCtx->clientSock, localCtx->buffer, sizeof(localCtx->buffer) - 1, 0);
     
     int returnSignal = 0;
-    char clientIp[64] = {0,};
+    char clientIp[32] = {0,};
     int clientPort = ntohs(localCtx->clientAddr.sin_port);
     strcpy(clientIp, inet_ntoa(localCtx->clientAddr.sin_addr));
 
@@ -132,22 +155,49 @@ int processClientEvent(GlobalServerConfig *globalConfig, LocalContext *localCtx)
 #else
             close(localCtx->clientSock);
 #endif
-            remoteShutdownServer(globalConfig);
+            globalConfig->isRunning = 0;
+            shutdownServerEngine(globalConfig);
             return 1;
         }
 
-        char submittedCode[64] = {0,};
+        char submittedCipher[128] = {0,};
+        char decryptedPlain[64] = {0,};
+        char clientRole[32] = {0,};
+        
         char *authPtr = strstr(localCtx->buffer, "AUTH:");
         if (authPtr != NULL) {
-            sscanf(authPtr, "AUTH:%63s", submittedCode);
-            for(int i = 0; submittedCode[i]; i++) {
-                submittedCode[i] = toupper((unsigned char)submittedCode[i]);
+            sscanf(authPtr, "AUTH:%127s", submittedCipher);
+            for(int i = 0; submittedCipher[i]; i++) {
+                submittedCipher[i] = toupper((unsigned char)submittedCipher[i]);
             }
+            manageSecurityCode(globalConfig, 2, submittedCipher, decryptedPlain);
+        }
+        
+        char *rolePtr = strstr(localCtx->buffer, "ROLE:");
+        if (rolePtr != NULL) {
+            sscanf(rolePtr, "ROLE:%31s", clientRole);
+            for(int i = 0; clientRole[i]; i++) {
+                clientRole[i] = toupper((unsigned char)clientRole[i]);
+            }
+        } else {
+            strcpy(clientRole, "USER");
         }
 
-        int outRemainingDays = 0;
-        char outExpTimeStr[32] = {0,};
-        int isValid = verifyClientCredentials(submittedCode, globalConfig->generatedAuthCode, &globalConfig->validStart, &globalConfig->validEnd, &outRemainingDays, outExpTimeStr);
+        time_t now = time(NULL);
+        struct tm startTmp = globalConfig->validStart;
+        struct tm endTmp = globalConfig->validEnd;
+        time_t startTime = mktime(&startTmp);
+        time_t endTime = mktime(&endTmp);
+        double diffSec = difftime(endTime, now);
+        int remainingDays = (int)(diffSec / 86400.0);
+
+        char expTimeStr[32] = {0,};
+        strftime(expTimeStr, sizeof(expTimeStr), "%Y-%m-%d %H:%M:%S", &endTmp);
+
+        int isValid = 1;
+        if (strcmp(decryptedPlain, globalConfig->generatedAuthCode) != 0) isValid = 0;
+        if (now < startTime || now > endTime) isValid = 0;
+        if (strcmp(clientRole, globalConfig->targetRole) != 0) isValid = 0;
 
         char currentPermit = 'N';
         if (isValid) {
@@ -164,12 +214,21 @@ int processClientEvent(GlobalServerConfig *globalConfig, LocalContext *localCtx)
             returnSignal = 1;
         }
 
-        const char *finalCode = isValid ? globalConfig->generatedAuthCode : (strlen(submittedCode) > 0 ? submittedCode : "NONE");
-        char remStr[16];
-        snprintf(remStr, sizeof(remStr), "+%02d", isValid ? outRemainingDays : 0);
+        printf("%c\t\t%s\t\t%s\t%s\t%d\t%s\t+%02d\n", 
+               currentPermit, clientRole, strlen(submittedCipher) > 0 ? submittedCipher : "NONE", 
+               clientIp, clientPort, expTimeStr, isValid ? remainingDays : 0);
 
-        printf("%c\t\t%s\t%s\t%d\t%s\t%s\n", currentPermit, finalCode, clientIp, clientPort, outExpTimeStr, remStr);
-        registerClientToTable(globalConfig, currentPermit, finalCode, clientIp, clientPort, outExpTimeStr, remStr);
+        if (globalConfig->dbRowCount < 100) {
+            ConnectedClientRow *row = &globalConfig->dbRows[globalConfig->dbRowCount];
+            row->permit = currentPermit;
+            strcpy(row->authCode, submittedCipher);
+            strcpy(row->ip, clientIp);
+            row->port = clientPort;
+            strcpy(row->expTime, expTimeStr);
+            strcpy(row->userRole, clientRole);
+            snprintf(row->remainingDays, sizeof(row->remainingDays), "+%02d", isValid ? remainingDays : 0);
+            globalConfig->dbRowCount++;
+        }
     }
 
 #if defined(_WIN32) || defined(_WIN64)
@@ -190,38 +249,4 @@ void shutdownServerEngine(GlobalServerConfig *globalConfig) {
     if (globalConfig->serverFd != INVALID_SOCKET) close(globalConfig->serverFd);
 #endif
     strcpy(globalConfig->serverStatusMsg, "Engine offline. Resources freed.");
-}
-
-int getConnectedTableJson(GlobalServerConfig *globalConfig, char *outJson, int maxLen) {
-    if (globalConfig == NULL || outJson == NULL) return -1;
-    int offset = snprintf(outJson, maxLen, "{\"total_connections\": %d, \"rows\": [", globalConfig->dbRowCount);
-    for (int i = 0; i < globalConfig->dbRowCount; i++) {
-        ConnectedClientRow *row = &globalConfig->dbRows[i];
-        int written = snprintf(outJson + offset, maxLen - offset,
-            "{\"permit\":\"%c\",\"auth_code\":\"%s\",\"ip\":\"%s\",\"port\":%d,\"exp_time\":\"%s\",\"remaining\":\"%s\"}%s",
-            row->permit, row->authCode, row->ip, row->port, row->expTime, row->remainingDays,
-            (i == globalConfig->dbRowCount - 1) ? "" : ",");
-        if (written < 0 || offset + written >= maxLen) return -2;
-        offset += written;
-    }
-    snprintf(outJson + offset, maxLen - offset, "]}");
-    return 0;
-}
-
-int getSingleRowData(GlobalServerConfig *globalConfig, int index, char *outPermit, char *outAuth, char *outIp, int *outPort, char *outExp, char *outRem) {
-    if (globalConfig == NULL || index < 0 || index >= globalConfig->dbRowCount) return -1;
-    ConnectedClientRow *row = &globalConfig->dbRows[index];
-    if (outPermit) *outPermit = row->permit;
-    if (outAuth) strcpy(outAuth, row->authCode);
-    if (outIp) strcpy(outIp, row->ip);
-    if (outPort) *outPort = row->port;
-    if (outExp) strcpy(outExp, row->expTime);
-    if (outRem) strcpy(outRem, row->remainingDays);
-    return 0;
-}
-
-void remoteShutdownServer(GlobalServerConfig *globalConfig) {
-    if (globalConfig == NULL) return; // 이전 호환 처리 유지
-    globalConfig->isRunning = 0;
-    shutdownServerEngine(globalConfig);
 }
