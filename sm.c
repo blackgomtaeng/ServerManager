@@ -112,6 +112,20 @@ void manageSecurityCode(GlobalServerConfig *globalConfig, int mode, const char *
     }
 }
 
+void writeLogToCsv(char permit, const char *role, const char *code, const char *ip, int port, const char *exp) {
+    time_t now = time(NULL);
+    struct tm *t = localtime(&now);
+    char filename[32];
+    snprintf(filename, sizeof(filename), "s%04d%02d%02d.csv", t->tm_year + 1900, t->tm_mon + 1, t->tm_mday);
+
+    FILE *fp = fopen(filename, "a");
+    if (fp != NULL) {
+        fprintf(fp, "%02d:%02d:%02d,%c,%s,%s,%s,%d,%s\n", 
+                t->tm_hour, t->tm_min, t->tm_sec, permit, role, code, ip, port, exp);
+        fclose(fp);
+    }
+}
+
 int startServerListen(GlobalServerConfig *globalConfig) {
     if (globalConfig == NULL) return -1;
     if (listen(globalConfig->serverFd, 3) == SOCKET_ERROR) {
@@ -121,14 +135,13 @@ int startServerListen(GlobalServerConfig *globalConfig) {
     globalConfig->isRunning = 1;
     strcpy(globalConfig->serverStatusMsg, "Server is Live and Listening");
     
-    printf("\n===========================================\n");
-    printf("   [통합 관리자 서버 엔진 활성화]   \n");
-    printf("   지정 등급 권한: %s\n", globalConfig->targetRole);
-    printf("   원본 인증 코드: %s\n", globalConfig->generatedAuthCode);
-    printf("   암호화된 코드 : %s\n", globalConfig->encryptedAuthCode);
-    printf("   포트 번호 [%d]에서 무한 루프 관제 시작\n", globalConfig->port);
-    printf("===========================================\n\n");
-    printf("허가여부\t접근등급\t입력암호코드\t\t\t아이피\t\t포트\t유효만료시각\t\t남은일수\n");
+    printf("\n========================================================================================\n");
+    printf("   [통합 멀티 관제 서버 엔진 가동] - 다중 연결 지원 및 CSV 자동화 기록 작동 중\n");
+    printf("   지정 등급 권한        : %s\n", globalConfig->targetRole);
+    printf("   원본인증코드 (Server) : %s\n", globalConfig->generatedAuthCode);
+    printf("   암호화된 코드(Client) : %s\n", globalConfig->encryptedAuthCode);
+    printf("========================================================================================\n\n");
+    printf("번호\t허가여부\t접근등급\t입력암호코드\t\t\t아이피\t\t포트\t유효만료시각\t\t남은일수\n");
     return 0;
 }
 
@@ -161,7 +174,7 @@ int processClientEvent(GlobalServerConfig *globalConfig, LocalContext *localCtx)
         }
 
         char submittedCipher[128] = {0,};
-        char decryptedPlain[64] = {0,};
+        char decryptedPlain[128] = {0,};
         char clientRole[32] = {0,};
         
         char *authPtr = strstr(localCtx->buffer, "AUTH:");
@@ -206,17 +219,10 @@ int processClientEvent(GlobalServerConfig *globalConfig, LocalContext *localCtx)
             int ackBytes = recv(localCtx->clientSock, localCtx->buffer, sizeof(localCtx->buffer) - 1, 0);
             if (ackBytes > 0 && (strstr(localCtx->buffer, "Y") != NULL || strstr(localCtx->buffer, "y") != NULL)) {
                 currentPermit = 'Y';
-            } else {
-                returnSignal = 1;
             }
         } else {
             send(localCtx->clientSock, "NO", 2, 0);
-            returnSignal = 1;
         }
-
-        printf("%c\t\t%s\t\t%s\t%s\t%d\t%s\t+%02d\n", 
-               currentPermit, clientRole, strlen(submittedCipher) > 0 ? submittedCipher : "NONE", 
-               clientIp, clientPort, expTimeStr, isValid ? remainingDays : 0);
 
         if (globalConfig->dbRowCount < 100) {
             ConnectedClientRow *row = &globalConfig->dbRows[globalConfig->dbRowCount];
@@ -228,7 +234,14 @@ int processClientEvent(GlobalServerConfig *globalConfig, LocalContext *localCtx)
             strcpy(row->userRole, clientRole);
             snprintf(row->remainingDays, sizeof(row->remainingDays), "+%02d", isValid ? remainingDays : 0);
             globalConfig->dbRowCount++;
+            
+            printf("%d\t%c\t\t%s\t\t%s\t%s\t%d\t%s\t%s\n", 
+                   globalConfig->dbRowCount, currentPermit, clientRole, 
+                   strlen(submittedCipher) > 0 ? submittedCipher : "NONE", 
+                   clientIp, clientPort, expTimeStr, row->remainingDays);
         }
+        
+        writeLogToCsv(currentPermit, clientRole, submittedCipher, clientIp, clientPort, expTimeStr);
     }
 
 #if defined(_WIN32) || defined(_WIN64)
@@ -246,7 +259,7 @@ void shutdownServerEngine(GlobalServerConfig *globalConfig) {
     if (globalConfig->serverFd != INVALID_SOCKET) closesocket(globalConfig->serverFd);
     WSACleanup();
 #else
-    if (globalConfig->serverFd != INVALID_SOCKET) close(globalConfig->serverFd);
+    f (globalConfig->serverFd != INVALID_SOCKET) close(globalConfig->serverFd);
 #endif
     strcpy(globalConfig->serverStatusMsg, "Engine offline. Resources freed.");
 }

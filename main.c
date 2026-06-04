@@ -38,8 +38,8 @@ int main() {
                     myServerGlobal.codeLength = 7;
                 }
 
-                char rawStart[64] = {0,};
-                char rawEnd[64] = {0,};
+                char rawStart[128] = {0,};
+                char rawEnd[128] = {0,};
                 while (getchar() != '\n');
 
                 printf("[설정] 시작 기간 입력 (자유 포맷 예: 2026.06.01 0000): ");
@@ -52,7 +52,7 @@ int main() {
                 rawEnd[strcspn(rawEnd, "\r\n")] = 0;
                 parseFlexibleDateTime(rawEnd, &myServerGlobal.validEnd);
 
-                char rawRole[64] = {0,};
+                char rawRole[128] = {0,};
                 printf("[설정] 지정 권한 등급 입력 (일반유저는 Enter / 운영자 op / 관리자 admin / 매니저 m): ");
                 fgets(rawRole, sizeof(rawRole), stdin);
                 rawRole[strcspn(rawRole, "\r\n")] = 0;
@@ -93,11 +93,7 @@ int main() {
 
             while (myServerGlobal.isRunning) {
                 LocalContext currentEventCtx;
-                int eventResult = processClientEvent(&myServerGlobal, &currentEventCtx);
-                if (eventResult == 1) {
-                    printf("\n[안내] 검증 거부 또는 원격 중지 이벤트가 감지되어 메인 제어반 인터페이스로 복귀합니다.\n");
-                    myServerGlobal.isRunning = 0;
-                }
+                processClientEvent(&myServerGlobal, &currentEventCtx);
             }
         }
     }

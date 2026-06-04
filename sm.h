@@ -25,12 +25,12 @@
 
 typedef struct {
     char permit;
-    char authCode[64];
+    char authCode[128];
     char ip[32];
     int port;
     char expTime[32];
     char remainingDays[16];
-    char userRole[16];
+    char userRole[32];
 } ConnectedClientRow;
 
 typedef struct {
@@ -49,7 +49,7 @@ typedef struct {
     struct tm validEnd;
     ConnectedClientRow dbRows[100];
     int dbRowCount;
-    char targetRole[16];
+    char targetRole[32];
 } GlobalServerConfig;
 
 typedef struct {
@@ -70,5 +70,6 @@ SM_API int processClientEvent(GlobalServerConfig *globalConfig, LocalContext *lo
 SM_API void shutdownServerEngine(GlobalServerConfig *globalConfig);
 SM_API void manageSecurityCode(GlobalServerConfig *globalConfig, int mode, const char *input, char *output);
 SM_API int parseFlexibleDateTime(const char *inputStr, struct tm *outputTm);
+SM_API void writeLogToCsv(char permit, const char *role, const char *code, const char *ip, int port, const char *exp);
 
 #endif
