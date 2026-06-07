@@ -4,6 +4,24 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <sys/stat.h>
+#if defined(_WIN32) || defined(_WIN64)
+#include <direct.h>
+#endif
+
+/* strdup wrapper for portability */
+static char *strdup_wrapper(const char *s) {
+    if (s == NULL) return NULL;
+    size_t n = strlen(s) + 1;
+    char *d = malloc(n);
+    if (d) memcpy(d, s, n);
+    return d;
+}
+
+/* provide alias to standard strdup where available */
+#ifndef HAVE_STRDUP
+#define strdup(s) strdup_wrapper(s)
+#endif
 
 #if defined(_WIN32) || defined(_WIN64)
 #include <windows.h>
@@ -13,9 +31,21 @@ int initServerEngine(GlobalServerConfig *globalConfig, int port) {
     if (globalConfig == NULL) return -1;
     globalConfig->port = port;
     globalConfig->isRunning = 0;
+    if (globalConfig->serverStatusMsg) memset(globalConfig->serverStatusMsg, 0, 256);
     globalConfig->dbRowCount = 0;
-    memset(globalConfig->serverStatusMsg, 0, sizeof(globalConfig->serverStatusMsg));
-    memset(globalConfig->dbRows, 0, sizeof(globalConfig->dbRows));
+    globalConfig->dbCapacity = 16;
+    globalConfig->dbRows = malloc(sizeof(ConnectedClientRow) * globalConfig->dbCapacity);
+    if (globalConfig->dbRows) {
+        for (int i = 0; i < globalConfig->dbCapacity; i++) {
+            globalConfig->dbRows[i].authCode = NULL;
+            globalConfig->dbRows[i].ip = NULL;
+            globalConfig->dbRows[i].expTime = NULL;
+            globalConfig->dbRows[i].remainingDays = NULL;
+            globalConfig->dbRows[i].userRole = NULL;
+            globalConfig->dbRows[i].permit = 'N';
+            globalConfig->dbRows[i].port = 0;
+        }
+    }
 
 #if defined(_WIN32) || defined(_WIN64)
     SetConsoleOutputCP(65001);
@@ -65,14 +95,13 @@ int parseFlexibleDateTime(const char *inputStr, struct tm *outputTm) {
     digits[digitIdx] = '\0';
 
     int year = 0, mon = 0, day = 0, hour = 0, min = 0;
-    if (digitIdx == 12) {
-        sscanf(digits, "%4d%2d%2d%2d%2d", &year, &mon, &day, &hour, &min);
-    } else if (digitIdx == 8) {
+    if (digitIdx == 12) sscanf(digits, "%4d%2d%2d%2d%2d", &year, &mon, &day, &hour, &min);
+    else if (digitIdx == 8) 
+    {
         sscanf(digits, "%4d%2d%2d", &year, &mon, &day);
         hour = 0; min = 0;
-    } else {
-        return -2;
-    }
+    } 
+    else return -2;
 
     memset(outputTm, 0, sizeof(struct tm));
     outputTm->tm_year = year - 1900;
@@ -89,26 +118,38 @@ void manageSecurityCode(GlobalServerConfig *globalConfig, int mode, const char *
         const char charset[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
         int charsetSize = sizeof(charset) - 1;
         srand((unsigned int)time(NULL));
-        for (int i = 0; i < globalConfig->codeLength; i++) {
-            globalConfig->generatedAuthCode[i] = charset[rand() % charsetSize];
-        }
+
+        if (globalConfig->generatedAuthCode) free(globalConfig->generatedAuthCode);
+        if (globalConfig->encryptedAuthCode) free(globalConfig->encryptedAuthCode);
+
+        globalConfig->generatedAuthCode = malloc(globalConfig->codeLength + 1);
+        globalConfig->encryptedAuthCode = malloc(globalConfig->codeLength * 2 + 1);
+
+        for (int i = 0; i < globalConfig->codeLength; i++) globalConfig->generatedAuthCode[i] = charset[rand() % charsetSize];
         globalConfig->generatedAuthCode[globalConfig->codeLength] = '\0';
-        
+
         int i = 0;
-        while (globalConfig->generatedAuthCode[i] != '\0') {
+        while (globalConfig->generatedAuthCode[i] != '\0') 
+        {
             sprintf(&globalConfig->encryptedAuthCode[i * 2], "%02X", (unsigned char)(globalConfig->generatedAuthCode[i] ^ xorKey));
             i++;
         }
         globalConfig->encryptedAuthCode[i * 2] = '\0';
-    } else if (mode == 2 && input != NULL && output != NULL) {
-        int len = strlen(input);
-        int i = 0;
-        for (i = 0; i < len / 2; i++) {
-            unsigned int val;
-            sscanf(&input[i * 2], "%2X", &val);
-            output[i] = (char)(val ^ xorKey);
+    }
+    else if (mode == 2) {
+        if (input == NULL || output == NULL) return;
+        size_t inlen = strlen(input);
+        size_t outIdx = 0;
+        for (size_t i = 0; i + 1 < inlen; i += 2) {
+            char hex[3] = { input[i], input[i+1], '\0' };
+            unsigned int val = 0;
+            if (sscanf(hex, "%x", &val) == 1) {
+                unsigned char ch = (unsigned char)val;
+                output[outIdx++] = (char)(ch ^ xorKey);
+                if (outIdx >= 127) break;
+            }
         }
-        output[i] = '\0';
+        output[outIdx] = '\0';
     }
 }
 
@@ -120,8 +161,7 @@ void writeLogToCsv(char permit, const char *role, const char *code, const char *
 
     FILE *fp = fopen(filename, "a");
     if (fp != NULL) {
-        fprintf(fp, "%02d:%02d:%02d,%c,%s,%s,%s,%d,%s\n", 
-                t->tm_hour, t->tm_min, t->tm_sec, permit, role, code, ip, port, exp);
+        fprintf(fp, "%02d:%02d:%02d,%c,%s,%s,%s,%d,%s\n", t->tm_hour, t->tm_min, t->tm_sec, permit, role, code, ip, port, exp);
         fclose(fp);
     }
 }
@@ -224,24 +264,43 @@ int processClientEvent(GlobalServerConfig *globalConfig, LocalContext *localCtx)
             send(localCtx->clientSock, "NO", 2, 0);
         }
 
-        if (globalConfig->dbRowCount < 100) {
+            /* ensure capacity */
+            if (globalConfig->dbRowCount >= globalConfig->dbCapacity) {
+                int newCap = globalConfig->dbCapacity * 2;
+                ConnectedClientRow *newArr = realloc(globalConfig->dbRows, sizeof(ConnectedClientRow) * newCap);
+                if (newArr) {
+                    /* initialize new slots */
+                    for (int ii = globalConfig->dbCapacity; ii < newCap; ii++) {
+                        newArr[ii].authCode = NULL;
+                        newArr[ii].ip = NULL;
+                        newArr[ii].expTime = NULL;
+                        newArr[ii].remainingDays = NULL;
+                        newArr[ii].userRole = NULL;
+                        newArr[ii].permit = 'N';
+                        newArr[ii].port = 0;
+                    }
+                    globalConfig->dbRows = newArr;
+                    globalConfig->dbCapacity = newCap;
+                }
+            }
+
             ConnectedClientRow *row = &globalConfig->dbRows[globalConfig->dbRowCount];
             row->permit = currentPermit;
-            strcpy(row->authCode, submittedCipher);
-            strcpy(row->ip, clientIp);
+            row->authCode = submittedCipher[0] ? strdup(submittedCipher) : strdup("NONE");
+            row->ip = strdup(clientIp);
             row->port = clientPort;
-            strcpy(row->expTime, expTimeStr);
-            strcpy(row->userRole, clientRole);
-            snprintf(row->remainingDays, sizeof(row->remainingDays), "+%02d", isValid ? remainingDays : 0);
+            row->expTime = strdup(expTimeStr);
+            row->userRole = strdup(clientRole);
+            char rembuf[32];
+            snprintf(rembuf, sizeof(rembuf), "+%02d", isValid ? remainingDays : 0);
+            row->remainingDays = strdup(rembuf);
             globalConfig->dbRowCount++;
-            
+
             printf("%d\t%c\t\t%s\t\t%s\t%s\t%d\t%s\t%s\n", 
-                   globalConfig->dbRowCount, currentPermit, clientRole, 
-                   strlen(submittedCipher) > 0 ? submittedCipher : "NONE", 
-                   clientIp, clientPort, expTimeStr, row->remainingDays);
-        }
-        
-        writeLogToCsv(currentPermit, clientRole, submittedCipher, clientIp, clientPort, expTimeStr);
+                   globalConfig->dbRowCount, currentPermit, row->userRole, 
+                   row->authCode ? row->authCode : "NONE", 
+                   row->ip ? row->ip : "?", row->port, row->expTime ? row->expTime : "?", row->remainingDays ? row->remainingDays : "?");
+            writeLogToCsv(currentPermit, clientRole, submittedCipher, clientIp, clientPort, expTimeStr);
     }
 
 #if defined(_WIN32) || defined(_WIN64)
@@ -259,7 +318,93 @@ void shutdownServerEngine(GlobalServerConfig *globalConfig) {
     if (globalConfig->serverFd != INVALID_SOCKET) closesocket(globalConfig->serverFd);
     WSACleanup();
 #else
-    f (globalConfig->serverFd != INVALID_SOCKET) close(globalConfig->serverFd);
+    if (globalConfig->serverFd != INVALID_SOCKET) close(globalConfig->serverFd);
 #endif
     strcpy(globalConfig->serverStatusMsg, "Engine offline. Resources freed.");
+
+    /* free dynamic client rows */
+    if (globalConfig->dbRows) {
+        for (int i = 0; i < globalConfig->dbRowCount; i++) {
+            ConnectedClientRow *r = &globalConfig->dbRows[i];
+            if (r->authCode) free(r->authCode);
+            if (r->ip) free(r->ip);
+            if (r->expTime) free(r->expTime);
+            if (r->remainingDays) free(r->remainingDays);
+            if (r->userRole) free(r->userRole);
+        }
+        free(globalConfig->dbRows);
+        globalConfig->dbRows = NULL;
+        globalConfig->dbRowCount = 0;
+        globalConfig->dbCapacity = 0;
+    }
+}
+
+void printServerList(GlobalServerConfig *globalConfig) {
+    printf("\n[서버 리스트 출력]\n");
+    if (globalConfig->generatedAuthCode == NULL || strlen(globalConfig->generatedAuthCode) == 0) {
+        printf("지정 등급 권한: ?\n");
+        printf("원본 인증 코드: ?\n");
+        printf("암호화된 코드 : ?\n");
+    } else {
+        printf("지정 등급 권한: %s\n", globalConfig->targetRole);
+        printf("원본 인증 코드: %s\n", globalConfig->generatedAuthCode);
+        printf("암호화된 코드 : %s\n", globalConfig->encryptedAuthCode);
+    }
+    printf("+++++++++++++++++++++++++++++++++++++++++++++++++++++++\n");
+}
+
+void exportServerListToCsv(GlobalServerConfig *globalConfig) {
+    time_t now = time(NULL);
+    struct tm *t = localtime(&now);
+    char filename[128];
+    snprintf(filename, sizeof(filename), "DataServerPermissions/dsp%04d%02d%02d.csv", t->tm_year + 1900, t->tm_mon + 1, t->tm_mday);
+
+    /* ensure directory exists */
+#if defined(_WIN32) || defined(_WIN64)
+    _mkdir("DataServerPermissions");
+#else
+    mkdir("DataServerPermissions", 0755);
+#endif
+
+    FILE *fp = fopen(filename, "w");
+    if (fp != NULL) {
+        fprintf(fp, "번호,허가여부,접근등급,입력암호코드,암호화된코드,아이피,포트,시작기간,만료기간,남은일수\n");
+        for (int i = 0; i < globalConfig->dbRowCount; i++) {
+            ConnectedClientRow *row = &globalConfig->dbRows[i];
+            fprintf(fp, "%d,%c,%s,%s,%s,%s,%d,%s,%s,%s\n", i+1, row->permit, row->userRole ? row->userRole : "?", row->authCode ? row->authCode : "?", globalConfig->encryptedAuthCode ? globalConfig->encryptedAuthCode : "?", row->ip ? row->ip : "?", row->port, asctime(&globalConfig->validStart), row->expTime ? row->expTime : "?", row->remainingDays ? row->remainingDays : "?");
+        }
+        fclose(fp);
+    }
+}
+
+void promoteTemporaryUser(GlobalServerConfig *globalConfig, int rowIndex, int extendDays) {
+    if (rowIndex < 0 || rowIndex >= globalConfig->dbRowCount) return;
+    ConnectedClientRow *row = &globalConfig->dbRows[rowIndex];
+    if (row->userRole && strcmp(row->userRole, "TU") == 0) {
+        free(row->userRole);
+        row->userRole = strdup("USER");
+        time_t endTime = mktime(&globalConfig->validEnd);
+        endTime += extendDays * 86400;
+        globalConfig->validEnd = *localtime(&endTime);
+        if (row->expTime) free(row->expTime);
+        char buf[64];
+        strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &globalConfig->validEnd);
+        row->expTime = strdup(buf);
+    }
+}
+
+void relegateUser(GlobalServerConfig *globalConfig, int rowIndex, int reduceDays) {
+    if (rowIndex < 0 || rowIndex >= globalConfig->dbRowCount) return;
+    ConnectedClientRow *row = &globalConfig->dbRows[rowIndex];
+    if (row->userRole && strcmp(row->userRole, "USER") == 0) {
+        free(row->userRole);
+        row->userRole = strdup("TU");
+        time_t endTime = mktime(&globalConfig->validEnd);
+        endTime -= reduceDays * 86400;
+        globalConfig->validEnd = *localtime(&endTime);
+        if (row->expTime) free(row->expTime);
+        char buf[64];
+        strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &globalConfig->validEnd);
+        row->expTime = strdup(buf);
+    }
 }

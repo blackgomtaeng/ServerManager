@@ -25,12 +25,12 @@
 
 typedef struct {
     char permit;
-    char authCode[128];
-    char ip[32];
+    char *authCode;
+    char *ip;
     int port;
-    char expTime[32];
-    char remainingDays[16];
-    char userRole[32];
+    char *expTime;
+    char *remainingDays;
+    char *userRole;
 } ConnectedClientRow;
 
 typedef struct {
@@ -41,15 +41,16 @@ typedef struct {
 #else
     int serverFd;
 #endif
-    char serverStatusMsg[256];
-    char generatedAuthCode[64];
-    char encryptedAuthCode[128];
+    char *serverStatusMsg;
+    char *generatedAuthCode;
+    char *encryptedAuthCode;
     int codeLength;
     struct tm validStart;
     struct tm validEnd;
-    ConnectedClientRow dbRows[100];
+    ConnectedClientRow *dbRows;   // 동적 배열
     int dbRowCount;
-    char targetRole[32];
+    int dbCapacity;
+    char *targetRole;
 } GlobalServerConfig;
 
 typedef struct {
@@ -71,5 +72,9 @@ SM_API void shutdownServerEngine(GlobalServerConfig *globalConfig);
 SM_API void manageSecurityCode(GlobalServerConfig *globalConfig, int mode, const char *input, char *output);
 SM_API int parseFlexibleDateTime(const char *inputStr, struct tm *outputTm);
 SM_API void writeLogToCsv(char permit, const char *role, const char *code, const char *ip, int port, const char *exp);
+SM_API void printServerList(GlobalServerConfig *globalConfig);
+SM_API void exportServerListToCsv(GlobalServerConfig *globalConfig);
+SM_API void promoteTemporaryUser(GlobalServerConfig *globalConfig, int rowIndex, int extendDays);
+SM_API void relegateUser(GlobalServerConfig *globalConfig, int rowIndex, int reduceDays);
 
 #endif
